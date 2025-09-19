@@ -1,7 +1,7 @@
 NAME = a.exe
 STANDARD = c23
-FLAGS = -Wall -Wextra -Werror -Wfatal-errors -Ilib
-DB_FLAGS = -g3 -Og
+FLAGS = -Wall -Wextra -Werror -Wfatal-errors -Wno-unused-function -Ilib
+DB_FLAGS = -g3
 STB_DEFS = -D STB_IMAGE_IMPLEMENTATION -D STB_IMAGE_WRITE_IMPLEMENTATION
 
 SOURCES = $(shell find . -name "*.c")
@@ -10,7 +10,7 @@ DEPENDENCIES = $(OBJECTS:%.o=%.d)
 
 all: debug
 
-debug: build $(OBJECTS)
+debug: build data $(OBJECTS)
 	@gcc $(OBJECTS) $(FLAGS) $(DB_FLAGS) -std=$(STANDARD) $(STB_DEFS) -o $(NAME)
 
 build/%.o: %.c
@@ -20,6 +20,9 @@ build/%.o: %.c
 
 build:
 	@mkdir -p build
+
+data:
+	@mkdir -p data
 
 -include $(DEPENDENCIES)
 
