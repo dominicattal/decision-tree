@@ -28,13 +28,24 @@ void iris_test(void)
     matrix_set_col(matrix, 2, petal_length_cm);
     matrix_set_col(matrix, 3, petal_width_cm);
 
+    DTTrainConfig config = (DTTrainConfig) {
+        .type = DT_CLASSIFIER,
+        .condition = DT_SPLIT_ENTROPY,
+        .discrete_threshold = 5,
+        .max_depth = 8,
+        .max_num_threads = 5
+    };
+
+    decision_tree_config(dt, config);
+
     decision_tree_train(dt, csv->num_rows-1, matrix->buffer, labels);
 
-    matrix_destroy(matrix);
-
-    float test[4] = {4.9, 3.1, 1.5, 0.1};
+    float test[4] = {7.9, 3.1, 2.0, 0.1};
     int label = decision_tree_predict(dt, test);
     printf("%s\n", csv_decode(csv, label));
+
+
+    matrix_destroy(matrix);
 
     decision_tree_destroy(dt);
 

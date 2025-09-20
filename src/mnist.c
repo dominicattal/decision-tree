@@ -1,8 +1,10 @@
+#include "tests.h"
+#include "models/decisiontree.h"
+#include "matrix.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stb_image.h>
 #include <stb_image_write.h>
-#include "tests.h"
 
 #define IMAGE_LENGTH 28
 
@@ -52,8 +54,40 @@ static Image* read_images(void)
     return images;
 }
 
+static void set_matrix_row(Matrix* mat, int row, u8* data)
+{
+    for (int i = 0; i < mat->cols; i ++)
+        mat->buffer[row * mat->cols + i] = data[i];
+}
+
 void mnist_test()
 {
     Image* images = read_images();    
+
+    Matrix* mat = matrix_create(MNIST_TRAIN_IMAGES_COUNT, IMAGE_LENGTH * IMAGE_LENGTH);
+    int* labels = malloc(MNIST_TRAIN_IMAGES_COUNT * sizeof(int));
+
+    for (int i = 0; i < MNIST_TRAIN_IMAGES_COUNT; i++) {
+        labels[i] = images[i].label;
+        set_matrix_row(mat, i, images[i].data);
+    }
+
+    DecisionTree* dt = decision_tree_create(IMAGE_LENGTH * IMAGE_LENGTH);
+
+    DTTrainConfig config = (DTTrainConfig) {
+        .type = DT_CLASSIFIER,
+        .condition = DT_SPLIT_ENTROPY,
+        .discrete_threshold = 5,
+        .max_depth = 2,
+        .max_num_threads = 20
+    };
+
+    decision_tree_config(dt, config);
+
+    decision_tree_train(dt, MNIST_TRAIN_IMAGES_COUNT, mat->buffer, labels);
+
     free(images);
+    free(labels);
+    matrix_destroy(mat);
+    decision_tree_destroy(dt);
 }

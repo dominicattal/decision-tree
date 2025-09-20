@@ -3,18 +3,22 @@
 
 typedef struct DecisionTree DecisionTree;
 
-enum {
+typedef enum {
+    DT_CLASSIFIER,
+    DT_REGRESSOR,
     DT_INT,
     DT_FLOAT,
     DT_SPLIT_ENTROPY,
     DT_SPLIT_GINI,
     DT_SPLIT_ERROR
-};
+} DTEnum;
 
 typedef struct {
-    int     condition;
+    DTEnum  type;
+    DTEnum  condition;
     int     discrete_threshold;
     int     max_depth;
+    int     max_num_threads;
 } DTTrainConfig;
 
 // creates and fits a decision tree to the attributes and labels provided

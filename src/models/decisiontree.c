@@ -1,4 +1,5 @@
 #include "decisiontree.h"
+#include <pthread.h>
 #include <bitset.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,9 +42,11 @@ DecisionTree* decision_tree_create(int num_attr)
     dt->num_attr = num_attr;
     dt->root = NULL;
     dt->config = (DTTrainConfig) {
+        .type = DT_CLASSIFIER,
         .condition = DT_SPLIT_ENTROPY,
         .discrete_threshold = 5,
-        .max_depth = 8
+        .max_depth = 8,
+        .max_num_threads = 1
     };
     return dt;
 }
@@ -164,6 +167,9 @@ typedef struct {
     Bitset**            bitset_left;
     Bitset**            bitset_right;
     int                 depth;
+    int*                num_threads_ptr;
+    pthread_mutex_t*    num_threads_mutex;
+    pthread_mutex_t*    thread_mutex;
 } DTTrainParams;
 
 static int cmp_discrete(float base, float test)
@@ -295,15 +301,21 @@ static int get_most_common_label(int num_labels, int* labels, Bitset* bitset)
     return most_common;
 }
 
-static DTNode* decision_tree_train_helper(DTTrainParams* params)
+static void* decision_tree_train_helper(void* void_params)
 {
-    DTTrainConfig*      config          = params->config;
-    int                 num_labels      = params->num_labels;
-    int                 num_attr        = params->num_attr;
-    float*              attr            = params->attr;
-    int*                labels          = params->labels;
-    Bitset*             bitset          = params->bitset;
-    int                 depth           = params->depth;
+    DTTrainParams*      params              = void_params;
+    Bitset*             bitset              = params->bitset;
+    DTTrainConfig*      config              = params->config;
+    int                 num_labels          = params->num_labels;
+    int                 num_attr            = params->num_attr;
+    float*              attr                = params->attr;
+    int*                labels              = params->labels;
+    int                 depth               = params->depth;
+    int*                num_threads_ptr     = params->num_threads_ptr;
+    pthread_mutex_t*    num_threads_mutex   = params->num_threads_mutex;
+
+    if (params->thread_mutex != NULL)
+        pthread_mutex_unlock(params->thread_mutex);
 
     DTNode* node;
     DTTrainParams* new_params;
@@ -318,6 +330,8 @@ static DTNode* decision_tree_train_helper(DTTrainParams* params)
     float entropy_parent, entropy_children;
     float entropy_left, entropy_right;
     float best_base;
+    pthread_t thid;
+    void* async_left;
 
     new_params = malloc(sizeof(DTTrainParams));
     new_params->config = config;
@@ -327,6 +341,9 @@ static DTNode* decision_tree_train_helper(DTTrainParams* params)
     new_params->labels = labels;
     new_params->depth = depth + 1;
     new_params->bitset = bitset;
+    new_params->num_threads_ptr = num_threads_ptr;
+    new_params->num_threads_mutex = num_threads_mutex;
+    new_params->thread_mutex = NULL;
 
     node = malloc(sizeof(DTNode));
     node->left = node->right = NULL;
@@ -372,7 +389,6 @@ static DTNode* decision_tree_train_helper(DTTrainParams* params)
             );
             information_gain = entropy_parent - entropy_children;
             if (information_gain > best_information_gain) {
-                //printf("info=%f e_p=%f e_l=%f e_r=%f e_c=%f n_p=%2d n_l=%2d n_r=%2d base=%f idx=%d\n", information_gain, entropy_parent, entropy_left, entropy_right, entropy_children, n_parent, n_left, n_right, new_params->base, new_params->attr_idx);
                 best_information_gain = information_gain;
                 best_attr_idx = new_params->attr_idx;
                 best_base = new_params->base;
@@ -396,7 +412,6 @@ static DTNode* decision_tree_train_helper(DTTrainParams* params)
 
     n_left = bitset_numset(bitset_left);
     n_right = bitset_numset(bitset_right);
-    //printf("%d %d %f %d %d %f\n", depth, best_attr_idx, node->base, n_left, n_right, best_information_gain);
     if (depth == 2 && node->base == 6) {
         for (int i = 0; i < num_labels; i++) {
             if (!bitset_isset(bitset_right, i))
@@ -406,10 +421,37 @@ static DTNode* decision_tree_train_helper(DTTrainParams* params)
 
     new_params->bitset_left = NULL;
     new_params->bitset_right = NULL;
-    new_params->bitset = bitset_left;
-    node->left = decision_tree_train_helper(new_params);
-    new_params->bitset = bitset_right;
-    node->right = decision_tree_train_helper(new_params);
+
+    int num_threads;
+    pthread_mutex_lock(num_threads_mutex);
+    num_threads = *num_threads_ptr;
+    if (num_threads < config->max_num_threads)
+        (*num_threads_ptr)++;
+    pthread_mutex_unlock(num_threads_mutex);
+
+    if (num_threads < config->max_num_threads) {
+        new_params->thread_mutex = malloc(sizeof(pthread_mutex_t));
+        pthread_mutex_init(new_params->thread_mutex, NULL);
+        pthread_mutex_lock(new_params->thread_mutex);
+        new_params->bitset = bitset_left;
+        pthread_create(&thid, NULL, decision_tree_train_helper, new_params);
+        pthread_mutex_lock(new_params->thread_mutex);
+        pthread_mutex_destroy(new_params->thread_mutex);
+        free(new_params->thread_mutex);
+        new_params->thread_mutex = NULL;
+        new_params->bitset = bitset_right;
+        node->right = decision_tree_train_helper(new_params);
+        pthread_join(thid, &async_left);
+        node->left = async_left;
+        pthread_mutex_lock(num_threads_mutex);
+        (*num_threads_ptr)--;
+        pthread_mutex_unlock(num_threads_mutex);
+    } else {
+        new_params->bitset = bitset_left;
+        node->left = decision_tree_train_helper(new_params);
+        new_params->bitset = bitset_right;
+        node->right = decision_tree_train_helper(new_params);
+    }
 
     bitset_destroy(bitset_left);
     bitset_destroy(bitset_right);
@@ -425,6 +467,7 @@ void decision_tree_train(DecisionTree* dt, int num_labels, float* attr, int* lab
     if (dt->root != NULL)
         dtnode_destroy(dt->root);
     DTTrainParams* params = malloc(sizeof(DTTrainParams));
+    int num_threads = 1;
     params->config = &dt->config;
     params->num_attr = dt->num_attr;
     params->num_labels = num_labels;;
@@ -432,7 +475,14 @@ void decision_tree_train(DecisionTree* dt, int num_labels, float* attr, int* lab
     params->labels = labels;
     params->bitset = bitset;
     params->depth = 0;
+    params->thread_mutex = NULL;
+    params->num_threads_ptr = &num_threads;
+    params->num_threads_mutex = malloc(sizeof(pthread_mutex_t));
+    pthread_mutex_init(params->num_threads_mutex, NULL);
     dt->root = decision_tree_train_helper(params);
+
+    pthread_mutex_destroy(params->num_threads_mutex);
+    free(params->num_threads_mutex);
     free(params);
     bitset_destroy(bitset);
 }
@@ -461,19 +511,17 @@ int decision_tree_predict(DecisionTree* dt, float* attr)
         else
             eq = "<=";
 
-        if (cmp(cur->base, attr[cur->attr_idx])) {
+        if (cmp(cur->base, attr[cur->attr_idx]))
             res = "Yes";
-        } else {
+        else
             res = "No";
-        }
 
         printf("Is (attr_idx[%d] = %f) %s %f? %s\n", cur->attr_idx, attr[cur->attr_idx], eq, cur->base, res);
 
-        if (cmp(cur->base, attr[cur->attr_idx])) {
+        if (cmp(cur->base, attr[cur->attr_idx]))
             cur = cur->right;
-        } else {
+        else
             cur = cur->left;
-        }
     }
 
     return cur->label;

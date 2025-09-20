@@ -23,6 +23,12 @@ void matrix_set_col(Matrix* mat, int col, float* buf)
         mat->buffer[i * mat->cols + col] = buf[i];
 }
 
+void matrix_set_row(Matrix* mat, int row, float* buf)
+{
+    for (int i = 0; i < mat->cols; i ++)
+        mat->buffer[row * mat->cols + i] = buf[i];
+}
+
 Matrix* matrix_multiply(Matrix* mat1, Matrix* mat2)
 {
     int idx3, idx1, idx2;
