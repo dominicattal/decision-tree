@@ -168,12 +168,12 @@ typedef struct {
 
 static int cmp_discrete(float base, float test)
 {
-    return base == test;
+    return test == base;
 }
 
 static int cmp_continuous(float base, float test)
 {
-    return base > test;
+    return test > base;
 }
 
 static void split(DTTrainParams* params)
@@ -199,38 +199,49 @@ static void split(DTTrainParams* params)
             continue;
         value = attr[get_attr_idx(num_attr, attr_idx, label_idx)];
         if (cmp(base, value))
-            bitset_set(*bitset_left, label_idx);
-        else
             bitset_set(*bitset_right, label_idx);
+        else
+            bitset_set(*bitset_left, label_idx);
     }
 }
 
-static float calculate_entropy(int num_labels, float* attr, int num_attr, int attr_idx, Bitset* bitset, int discrete, float base)
+static float calculate_entropy(int num_labels, int* labels, Bitset* bitset)
 {
     float entropy, p;
-    int n, pass, label_idx;
-    int (*cmp)(float, float);
+    int n, label_idx, uniq_idx;
+    int num_unique_labels;
+    int* unique_labels;
+    int* unique_labels_count;
 
     n = bitset_numset(bitset);
     if (n == 0)
         return 0;
 
-    if (discrete)
-        cmp = cmp_discrete;
-    else
-        cmp = cmp_continuous;
+    num_unique_labels = get_num_unique_labels(num_labels, labels, bitset);
+    unique_labels = get_unique_labels(num_unique_labels, num_labels, labels, bitset);
+    unique_labels_count = calloc(num_unique_labels, sizeof(int));
 
-    pass = 0;
-    for (label_idx = 0; label_idx < num_labels; label_idx++)
-        if (bitset_isset(bitset, label_idx) && cmp(base, attr[get_attr_idx(num_attr, attr_idx, label_idx)]))
-            pass++;
+    for (label_idx = 0; label_idx < num_labels; label_idx++) {
+        if (!bitset_isset(bitset, label_idx))
+            continue;
+        for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
+            if (labels[label_idx] == unique_labels[uniq_idx]) {
+                unique_labels_count[uniq_idx]++;
+                break;
+            }
+        }
+    }
 
-    p = (float)pass / n;
+    entropy = 0;
+    for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
+        if (unique_labels_count[uniq_idx] == 0)
+            continue;
+        p = (float)unique_labels_count[uniq_idx] / n;
+        entropy -= p * log2(p);
+    }
 
-    if (p == 0 || 1 - p == 0)
-        return 1;
-
-    entropy = -(p * log2(p) + (1 - p) * log2(1 - p));
+    free(unique_labels);
+    free(unique_labels_count);
 
     return entropy;
 }
@@ -300,12 +311,13 @@ static DTNode* decision_tree_train_helper(DTTrainParams* params)
     Bitset* bitset_right;
     float* unique_values;
     int best_attr_idx, attr_idx;
-    int best_base, best_discrete;
+    int best_discrete;
     int uniq_idx, num_unique_values;
     int n_parent, n_left, n_right;
     float information_gain, best_information_gain;
     float entropy_parent, entropy_children;
     float entropy_left, entropy_right;
+    float best_base;
 
     new_params = malloc(sizeof(DTTrainParams));
     new_params->config = config;
@@ -346,22 +358,23 @@ static DTNode* decision_tree_train_helper(DTTrainParams* params)
         new_params->attr_idx = attr_idx;
         for (uniq_idx = 0; uniq_idx < num_unique_values; uniq_idx++) {
             new_params->base = unique_values[uniq_idx];
-            entropy_parent = calculate_entropy(num_labels, attr, num_attr, attr_idx, bitset, new_params->discrete, new_params->base);
+            entropy_parent = calculate_entropy(num_labels, labels, bitset);
             bitset_unsetall(bitset_left);
             bitset_unsetall(bitset_right);
             split(new_params);
             n_left = bitset_numset(bitset_left);
             n_right = bitset_numset(bitset_right);
-            entropy_left = calculate_entropy(num_labels, attr, num_attr, attr_idx, bitset_left, new_params->discrete, new_params->base);
-            entropy_right = calculate_entropy(num_labels, attr, num_attr, attr_idx, bitset_right, new_params->discrete, new_params->base);
+            entropy_left = calculate_entropy(num_labels, labels, bitset_left);
+            entropy_right = calculate_entropy(num_labels, labels, bitset_right);
             entropy_children = (
-                    (n_left  / n_parent) * entropy_left
-                +   (n_right / n_parent) * entropy_right
+                    ((float)n_left  / n_parent) * entropy_left
+                +   ((float)n_right / n_parent) * entropy_right
             );
             information_gain = entropy_parent - entropy_children;
             if (information_gain > best_information_gain) {
+                //printf("info=%f e_p=%f e_l=%f e_r=%f e_c=%f n_p=%2d n_l=%2d n_r=%2d base=%f idx=%d\n", information_gain, entropy_parent, entropy_left, entropy_right, entropy_children, n_parent, n_left, n_right, new_params->base, new_params->attr_idx);
                 best_information_gain = information_gain;
-                best_attr_idx = attr_idx;
+                best_attr_idx = new_params->attr_idx;
                 best_base = new_params->base;
                 best_discrete = new_params->discrete;
             }
@@ -380,6 +393,16 @@ static DTNode* decision_tree_train_helper(DTTrainParams* params)
     node->discrete = best_discrete;
     node->attr_idx = best_attr_idx;
     node->base = best_base;
+
+    n_left = bitset_numset(bitset_left);
+    n_right = bitset_numset(bitset_right);
+    //printf("%d %d %f %d %d %f\n", depth, best_attr_idx, node->base, n_left, n_right, best_information_gain);
+    if (depth == 2 && node->base == 6) {
+        for (int i = 0; i < num_labels; i++) {
+            if (!bitset_isset(bitset_right, i))
+                continue;
+        }
+    }
 
     new_params->bitset_left = NULL;
     new_params->bitset_right = NULL;
@@ -436,20 +459,20 @@ int decision_tree_predict(DecisionTree* dt, float* attr)
         if (cur->discrete)
             eq = "==";
         else
-            eq = ">=";
+            eq = "<=";
 
         if (cmp(cur->base, attr[cur->attr_idx])) {
-            res = "No";
-        } else {
             res = "Yes";
+        } else {
+            res = "No";
         }
 
         printf("Is (attr_idx[%d] = %f) %s %f? %s\n", cur->attr_idx, attr[cur->attr_idx], eq, cur->base, res);
 
         if (cmp(cur->base, attr[cur->attr_idx])) {
-            cur = cur->left;
-        } else {
             cur = cur->right;
+        } else {
+            cur = cur->left;
         }
     }
 

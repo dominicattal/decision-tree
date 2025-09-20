@@ -32,7 +32,7 @@ void iris_test(void)
 
     matrix_destroy(matrix);
 
-    float test[4] = {7.2, 3.2, 4.7, 1.4};
+    float test[4] = {6.1, 2.8, 4, 1.3};
     int label = decision_tree_predict(dt, test);
     printf("%d\n", label);
 
