@@ -26,6 +26,7 @@ typedef struct {
     int num_rows;
     int num_cols;
     Cell* cells;
+    Trie* trie;
 } CSV;
 
 // Object creation/deletion
@@ -71,8 +72,9 @@ char**      csv_column_string(CSV* csv, const char* col_name);
 
 // ----- CSV operations -----
 
-// maps strings to ints for classifying
+// maps strings to ints for classifying and vice-versa
 void        csv_encode(CSV* csv, const char* col_name);
+const char* csv_decode(CSV* csv, int id);
 
 // one hot encode to remove biases
 void        csv_one_hot_encode(CSV* csv, const char* col_name);

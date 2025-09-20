@@ -126,6 +126,7 @@ CSV* csv_read(const char* path)
     csv->num_rows = num_rows;
     csv->num_cols = num_cols;
     csv->cells = cells;
+    csv->trie = trie_create();
 
     return csv;
 }
@@ -166,6 +167,7 @@ void csv_destroy(CSV* csv)
     for (int i = 0; i < csv->num_rows * csv->num_cols; i++)
         if (csv->cells[i].type == CSV_STRING)
             csv_free(csv->cells[i].val_string);
+    trie_destroy(csv->trie);
     csv_free(csv->cells);
     csv_free(csv);
 }
@@ -350,6 +352,8 @@ void csv_encode(CSV* csv, const char* col_name)
     int row, col;
     int row_start, row_end;
 
+    trie = csv->trie;
+
     col = csv_column_id(csv, col_name);
     if (col == -1) {
         csv_print("Could not find column %s to encode", col_name);
@@ -358,7 +362,6 @@ void csv_encode(CSV* csv, const char* col_name)
     row_start = 1;
     row_end = csv->num_rows - 1;
 
-    trie = trie_create();
     for (row = row_start; row <= row_end; row++) {
         cell = csv_cell(csv, row, col);
         if (cell->type != CSV_STRING) {
@@ -372,7 +375,11 @@ void csv_encode(CSV* csv, const char* col_name)
         cell->type = CSV_INT;
         csv_free(tmp);
     }
-    trie_destroy(trie);
+}
+
+const char* csv_decode(CSV* csv, int id)
+{
+    return trie_id_key(csv->trie, id);
 }
 
 void csv_one_hot_encode(CSV* csv, const char* col_name)

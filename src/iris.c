@@ -32,9 +32,9 @@ void iris_test(void)
 
     matrix_destroy(matrix);
 
-    float test[4] = {6.1, 2.8, 4, 1.3};
+    float test[4] = {4.9, 3.1, 1.5, 0.1};
     int label = decision_tree_predict(dt, test);
-    printf("%d\n", label);
+    printf("%s\n", csv_decode(csv, label));
 
     decision_tree_destroy(dt);
 
