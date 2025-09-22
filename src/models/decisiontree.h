@@ -30,6 +30,7 @@ typedef struct {
 // labels are for each corresponding attribute set
 // cond is the split condition, either DT_SPLIT_ENTROPY, DT_SPLIT_GINI, DT_SPLIT_ERROR
 DecisionTree*   decision_tree_create(int num_attr);
+DTTrainConfig   decision_tree_default_config(void);
 void            decision_tree_config(DecisionTree* dt, DTTrainConfig config);
 void            decision_tree_train(DecisionTree* dt, int num_labels, float* attr, int* labels);
 int             decision_tree_predict(DecisionTree* dt, float* attr);

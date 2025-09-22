@@ -28,13 +28,10 @@ void iris_test(void)
     matrix_set_col(matrix, 2, petal_length_cm);
     matrix_set_col(matrix, 3, petal_width_cm);
 
-    DTTrainConfig config = (DTTrainConfig) {
-        .type = DT_CLASSIFIER,
-        .condition = DT_SPLIT_ENTROPY,
-        .discrete_threshold = 5,
-        .max_depth = 8,
-        .max_num_threads = 5
-    };
+    DTTrainConfig config = decision_tree_default_config();
+    config.max_num_threads = 20;
+    config.discrete_threshold = 2;
+    config.condition = DT_SPLIT_GINI;
 
     decision_tree_config(dt, config);
 

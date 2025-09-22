@@ -41,14 +41,20 @@ DecisionTree* decision_tree_create(int num_attr)
     DecisionTree* dt = malloc(sizeof(DecisionTree));
     dt->num_attr = num_attr;
     dt->root = NULL;
-    dt->config = (DTTrainConfig) {
+    dt->config = decision_tree_default_config();
+    return dt;
+}
+
+DTTrainConfig decision_tree_default_config(void)
+{
+    return (DTTrainConfig) {
         .type = DT_CLASSIFIER,
         .condition = DT_SPLIT_ENTROPY,
         .discrete_threshold = 5,
         .max_depth = 8,
         .max_num_threads = 1
     };
-    return dt;
+
 }
 
 void decision_tree_config(DecisionTree* dt, DTTrainConfig config)
@@ -252,6 +258,47 @@ static float calculate_entropy(int num_labels, int* labels, Bitset* bitset)
     return entropy;
 }
 
+static float calculate_gini(int num_labels, int* labels, Bitset* bitset)
+{
+    float gini, p;
+    int n, label_idx, uniq_idx;
+    int num_unique_labels;
+    int* unique_labels;
+    int* unique_labels_count;
+
+    n = bitset_numset(bitset);
+    if (n == 0)
+        return 0;
+
+    num_unique_labels = get_num_unique_labels(num_labels, labels, bitset);
+    unique_labels = get_unique_labels(num_unique_labels, num_labels, labels, bitset);
+    unique_labels_count = calloc(num_unique_labels, sizeof(int));
+
+    for (label_idx = 0; label_idx < num_labels; label_idx++) {
+        if (!bitset_isset(bitset, label_idx))
+            continue;
+        for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
+            if (labels[label_idx] == unique_labels[uniq_idx]) {
+                unique_labels_count[uniq_idx]++;
+                break;
+            }
+        }
+    }
+
+    gini = 1;
+    for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
+        if (unique_labels_count[uniq_idx] == 0)
+            continue;
+        p = (float)unique_labels_count[uniq_idx] / n;
+        gini -= p * p;
+    }
+
+    free(unique_labels);
+    free(unique_labels_count);
+
+    return gini;
+}
+
 static int all_labels_equal(int num_labels, int* labels, Bitset* bitset)
 {
     int i, base = -1;
@@ -327,6 +374,8 @@ static void* decision_tree_train_helper(void* void_params)
     int uniq_idx, num_unique_values;
     int n_parent, n_left, n_right;
     float information_gain, best_information_gain;
+    float gini, best_gini;
+    float gini_left, gini_right;
     float entropy_parent, entropy_children;
     float entropy_left, entropy_right;
     float best_base;
@@ -362,7 +411,8 @@ static void* decision_tree_train_helper(void* void_params)
     new_params->bitset_left = &bitset_left;
     new_params->bitset_right = &bitset_right;
 
-    best_information_gain = 0;
+    best_information_gain = -1e9;
+    best_gini = 1e9;
     best_attr_idx = -1;
     best_base = -1;
     best_discrete = -1;
@@ -375,24 +425,39 @@ static void* decision_tree_train_helper(void* void_params)
         new_params->attr_idx = attr_idx;
         for (uniq_idx = 0; uniq_idx < num_unique_values; uniq_idx++) {
             new_params->base = unique_values[uniq_idx];
-            entropy_parent = calculate_entropy(num_labels, labels, bitset);
             bitset_unsetall(bitset_left);
             bitset_unsetall(bitset_right);
             split(new_params);
             n_left = bitset_numset(bitset_left);
             n_right = bitset_numset(bitset_right);
-            entropy_left = calculate_entropy(num_labels, labels, bitset_left);
-            entropy_right = calculate_entropy(num_labels, labels, bitset_right);
-            entropy_children = (
-                    ((float)n_left  / n_parent) * entropy_left
-                +   ((float)n_right / n_parent) * entropy_right
-            );
-            information_gain = entropy_parent - entropy_children;
-            if (information_gain > best_information_gain) {
-                best_information_gain = information_gain;
-                best_attr_idx = new_params->attr_idx;
-                best_base = new_params->base;
-                best_discrete = new_params->discrete;
+            if (config->condition == DT_SPLIT_ENTROPY) {
+                entropy_parent = calculate_entropy(num_labels, labels, bitset);
+                entropy_left = calculate_entropy(num_labels, labels, bitset_left);
+                entropy_right = calculate_entropy(num_labels, labels, bitset_right);
+                entropy_children = (
+                        ((float)n_left  / n_parent) * entropy_left
+                    +   ((float)n_right / n_parent) * entropy_right
+                );
+                information_gain = entropy_parent - entropy_children;
+                if (information_gain > best_information_gain) {
+                    best_information_gain = information_gain;
+                    best_attr_idx = new_params->attr_idx;
+                    best_base = new_params->base;
+                    best_discrete = new_params->discrete;
+                }
+            } else if (config->condition == DT_SPLIT_GINI) {
+                gini_left = calculate_gini(num_labels, labels, bitset_left);
+                gini_right = calculate_gini(num_labels, labels, bitset_right);
+                gini = (
+                        ((float)n_left  / n_parent) * gini_left
+                    +   ((float)n_right / n_parent) * gini_right
+                );
+                if (gini < best_gini) {
+                    best_gini = gini;
+                    best_attr_idx = new_params->attr_idx;
+                    best_base = new_params->base;
+                    best_discrete = new_params->discrete;
+                }
             }
         }
         free(unique_values);
@@ -460,6 +525,45 @@ static void* decision_tree_train_helper(void* void_params)
     return node;
 }
 
+static int validate_config(DTTrainConfig* config)
+{
+    int type_valid = (
+            config->type == DT_CLASSIFIER
+        ||  config->type == DT_REGRESSOR
+    );
+    if (!type_valid) {
+        puts("Config type must be DT_CLASSIFIER or DT_REGRESSOR");
+        return 0;
+    }
+
+    int condition_valid = (
+            config->condition == DT_SPLIT_ENTROPY
+        ||  config->condition == DT_SPLIT_GINI
+        ||  config->condition == DT_SPLIT_ERROR
+    );
+    if (!condition_valid) {
+        puts("Config condition must be DT_SPLIT_ENTROPY, DT_SPLIT_GINI, or DT_SPLIT_ERROR");
+        return 0;
+    }
+
+    if (config->discrete_threshold < 2) {
+        puts("Config discrete threshold must be at least 2");
+        return 0;
+    }
+
+    if (config->max_depth <= 0) {
+        puts("Config max depth must be greater than 0");
+        return 0;
+    }
+
+    if (config->max_num_threads <= 0) {
+        puts("Config max num threads must be greater than 0");
+        return 0;
+    }
+
+    return 1;
+}
+
 void decision_tree_train(DecisionTree* dt, int num_labels, float* attr, int* labels)
 {
     Bitset* bitset = bitset_create(num_labels);
@@ -469,6 +573,10 @@ void decision_tree_train(DecisionTree* dt, int num_labels, float* attr, int* lab
     DTTrainParams* params = malloc(sizeof(DTTrainParams));
     int num_threads = 1;
     params->config = &dt->config;
+    if (!validate_config(params->config)) {
+        free(params);
+        return;
+    }
     params->num_attr = dt->num_attr;
     params->num_labels = num_labels;;
     params->attr = attr;
