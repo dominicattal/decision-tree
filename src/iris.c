@@ -31,7 +31,7 @@ void iris_test(void)
     DTTrainConfig config = decision_tree_default_config();
     config.max_num_threads = 20;
     config.discrete_threshold = 2;
-    config.condition = DT_SPLIT_GINI;
+    config.condition = DT_SPLIT_ERROR;
 
     decision_tree_config(dt, config);
 

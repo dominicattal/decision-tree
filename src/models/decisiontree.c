@@ -299,6 +299,47 @@ static float calculate_gini(int num_labels, int* labels, Bitset* bitset)
     return gini;
 }
 
+static float calculate_error(int num_labels, int* labels, Bitset* bitset)
+{
+    float test_p, p;
+    int n, label_idx, uniq_idx;
+    int num_unique_labels;
+    int* unique_labels;
+    int* unique_labels_count;
+
+    n = bitset_numset(bitset);
+    if (n == 0)
+        return 0;
+
+    num_unique_labels = get_num_unique_labels(num_labels, labels, bitset);
+    unique_labels = get_unique_labels(num_unique_labels, num_labels, labels, bitset);
+    unique_labels_count = calloc(num_unique_labels, sizeof(int));
+
+    for (label_idx = 0; label_idx < num_labels; label_idx++) {
+        if (!bitset_isset(bitset, label_idx))
+            continue;
+        for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
+            if (labels[label_idx] == unique_labels[uniq_idx]) {
+                unique_labels_count[uniq_idx]++;
+                break;
+            }
+        }
+    }
+
+    p = 0;
+    for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
+        if (unique_labels_count[uniq_idx] == 0)
+            continue;
+        test_p = (float)unique_labels_count[uniq_idx] / n;
+        p = (test_p > p) ? test_p : p;
+    }
+
+    free(unique_labels);
+    free(unique_labels_count);
+
+    return 1 - p;
+}
+
 static int all_labels_equal(int num_labels, int* labels, Bitset* bitset)
 {
     int i, base = -1;
@@ -376,6 +417,8 @@ static void* decision_tree_train_helper(void* void_params)
     float information_gain, best_information_gain;
     float gini, best_gini;
     float gini_left, gini_right;
+    float error, best_error;
+    float error_left, error_right;
     float entropy_parent, entropy_children;
     float entropy_left, entropy_right;
     float best_base;
@@ -413,6 +456,7 @@ static void* decision_tree_train_helper(void* void_params)
 
     best_information_gain = -1e9;
     best_gini = 1e9;
+    best_error = 1e9;
     best_attr_idx = -1;
     best_base = -1;
     best_discrete = -1;
@@ -454,6 +498,19 @@ static void* decision_tree_train_helper(void* void_params)
                 );
                 if (gini < best_gini) {
                     best_gini = gini;
+                    best_attr_idx = new_params->attr_idx;
+                    best_base = new_params->base;
+                    best_discrete = new_params->discrete;
+                }
+            } else if (config->condition == DT_SPLIT_ERROR) {
+                error_left = calculate_error(num_labels, labels, bitset_left);
+                error_right = calculate_error(num_labels, labels, bitset_right);
+                error = (
+                        ((float)n_left  / n_parent) * error_left
+                    +   ((float)n_right / n_parent) * error_right
+                );
+                if (error < best_error) {
+                    best_error = error;
                     best_attr_idx = new_params->attr_idx;
                     best_base = new_params->base;
                     best_discrete = new_params->discrete;
