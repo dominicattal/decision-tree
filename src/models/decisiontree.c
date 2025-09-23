@@ -3,6 +3,7 @@
 #include <bitset.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 
 typedef struct DTNode DTNode;
@@ -13,11 +14,15 @@ typedef struct DTNode {
     float base;
     int attr_idx;
     int discrete;
-    int label;
+    union {
+        int label;
+        float avg;
+    };
 } DTNode;
 
 typedef struct DecisionTree {
     int num_attr;
+    char** attr_names;
     DTTrainConfig config;
     DTNode* root;
 } DecisionTree;
@@ -36,13 +41,45 @@ static void dtnode_destroy(DTNode* node)
     free(node);
 }
 
-DecisionTree* decision_tree_create(int num_attr)
+static char** copy_attr_names(int num_attr, const char** attr_names)
+{
+    if (attr_names == NULL)
+        return NULL;
+
+    char** copy_attr_names = malloc(num_attr * sizeof(char*));
+    for (int i = 0; i < num_attr; i++) {
+        if (attr_names[i] == NULL) {
+            copy_attr_names[i] = NULL;
+            continue;
+        }
+        int n = strlen(attr_names[i]);
+        copy_attr_names[i] = malloc((n+1) * sizeof(char));
+        strncpy(copy_attr_names[i], attr_names[i], n+1);
+    }
+
+    return copy_attr_names;
+}
+
+DecisionTree* decision_tree_create(int num_attr, const char** attr_names)
 {
     DecisionTree* dt = malloc(sizeof(DecisionTree));
     dt->num_attr = num_attr;
     dt->root = NULL;
     dt->config = decision_tree_default_config();
+    dt->attr_names = copy_attr_names(num_attr, attr_names);
     return dt;
+}
+
+void decision_tree_set_attr(DecisionTree* dt, int num_attr, const char** attr_names)
+{
+    if (dt->root != NULL)
+        dtnode_destroy(dt->root);
+    dt->root = NULL;
+    if (dt->attr_names != NULL)
+        for (int i = 0; i < dt->num_attr; i++)
+            free(dt->attr_names[i]);
+    free(dt->attr_names); 
+    dt->attr_names = copy_attr_names(num_attr, attr_names);
 }
 
 DTTrainConfig decision_tree_default_config(void)
@@ -54,7 +91,6 @@ DTTrainConfig decision_tree_default_config(void)
         .max_depth = 8,
         .max_num_threads = 1
     };
-
 }
 
 void decision_tree_config(DecisionTree* dt, DTTrainConfig config)
@@ -160,6 +196,25 @@ not_unique:
     return unique_labels;
 }
 
+static int* get_unique_labels_count(int num_unique_labels, int* unique_labels, int num_labels, int* labels, Bitset* bitset)
+{
+    int label_idx, uniq_idx;
+    int* unique_labels_count = calloc(num_unique_labels, sizeof(int));
+
+    for (label_idx = 0; label_idx < num_labels; label_idx++) {
+        if (!bitset_isset(bitset, label_idx))
+            continue;
+        for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
+            if (labels[label_idx] == unique_labels[uniq_idx]) {
+                unique_labels_count[uniq_idx]++;
+                break;
+            }
+        }
+    }
+
+    return unique_labels_count;
+}
+
 typedef struct {
     DTTrainConfig*      config;
     int                 num_labels;
@@ -220,8 +275,7 @@ static void split(DTTrainParams* params)
 static float calculate_entropy(int num_labels, int* labels, Bitset* bitset)
 {
     float entropy, p;
-    int n, label_idx, uniq_idx;
-    int num_unique_labels;
+    int n, num_unique_labels, uniq_idx;
     int* unique_labels;
     int* unique_labels_count;
 
@@ -231,18 +285,7 @@ static float calculate_entropy(int num_labels, int* labels, Bitset* bitset)
 
     num_unique_labels = get_num_unique_labels(num_labels, labels, bitset);
     unique_labels = get_unique_labels(num_unique_labels, num_labels, labels, bitset);
-    unique_labels_count = calloc(num_unique_labels, sizeof(int));
-
-    for (label_idx = 0; label_idx < num_labels; label_idx++) {
-        if (!bitset_isset(bitset, label_idx))
-            continue;
-        for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
-            if (labels[label_idx] == unique_labels[uniq_idx]) {
-                unique_labels_count[uniq_idx]++;
-                break;
-            }
-        }
-    }
+    unique_labels_count = get_unique_labels_count(num_unique_labels, unique_labels, num_labels, labels, bitset);
 
     entropy = 0;
     for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
@@ -261,8 +304,7 @@ static float calculate_entropy(int num_labels, int* labels, Bitset* bitset)
 static float calculate_gini(int num_labels, int* labels, Bitset* bitset)
 {
     float gini, p;
-    int n, label_idx, uniq_idx;
-    int num_unique_labels;
+    int n, num_unique_labels, uniq_idx;
     int* unique_labels;
     int* unique_labels_count;
 
@@ -272,18 +314,7 @@ static float calculate_gini(int num_labels, int* labels, Bitset* bitset)
 
     num_unique_labels = get_num_unique_labels(num_labels, labels, bitset);
     unique_labels = get_unique_labels(num_unique_labels, num_labels, labels, bitset);
-    unique_labels_count = calloc(num_unique_labels, sizeof(int));
-
-    for (label_idx = 0; label_idx < num_labels; label_idx++) {
-        if (!bitset_isset(bitset, label_idx))
-            continue;
-        for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
-            if (labels[label_idx] == unique_labels[uniq_idx]) {
-                unique_labels_count[uniq_idx]++;
-                break;
-            }
-        }
-    }
+    unique_labels_count = get_unique_labels_count(num_unique_labels, unique_labels, num_labels, labels, bitset);
 
     gini = 1;
     for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
@@ -302,8 +333,7 @@ static float calculate_gini(int num_labels, int* labels, Bitset* bitset)
 static float calculate_error(int num_labels, int* labels, Bitset* bitset)
 {
     float test_p, p;
-    int n, label_idx, uniq_idx;
-    int num_unique_labels;
+    int n, num_unique_labels, uniq_idx;
     int* unique_labels;
     int* unique_labels_count;
 
@@ -313,18 +343,7 @@ static float calculate_error(int num_labels, int* labels, Bitset* bitset)
 
     num_unique_labels = get_num_unique_labels(num_labels, labels, bitset);
     unique_labels = get_unique_labels(num_unique_labels, num_labels, labels, bitset);
-    unique_labels_count = calloc(num_unique_labels, sizeof(int));
-
-    for (label_idx = 0; label_idx < num_labels; label_idx++) {
-        if (!bitset_isset(bitset, label_idx))
-            continue;
-        for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
-            if (labels[label_idx] == unique_labels[uniq_idx]) {
-                unique_labels_count[uniq_idx]++;
-                break;
-            }
-        }
-    }
+    unique_labels_count = get_unique_labels_count(num_unique_labels, unique_labels, num_labels, labels, bitset);
 
     p = 0;
     for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
@@ -338,6 +357,33 @@ static float calculate_error(int num_labels, int* labels, Bitset* bitset)
     free(unique_labels_count);
 
     return 1 - p;
+}
+
+static float calculate_rmse(int num_labels, float* labels, Bitset* bitset)
+{
+    float avg, sum, val;
+    int n, cnt, label_idx;
+
+    n = bitset_numset(bitset);
+    if (n == 0)
+        return 0;
+
+    avg = cnt = 0;
+    for (label_idx = 0; label_idx < num_labels; label_idx++) {
+        if (!bitset_isset(bitset, label_idx))
+            continue;
+        avg = (avg * cnt + labels[label_idx]) / (cnt + 1);
+        cnt++;
+    }
+    sum = 0;
+    for (label_idx = 0; label_idx < num_labels; label_idx++) {
+        if (!bitset_isset(bitset, label_idx))
+            continue;
+        val = fabsf(labels[label_idx] - avg);
+        sum += (val * val) / n;
+    }
+
+    return sqrt(sum);
 }
 
 static int all_labels_equal(int num_labels, int* labels, Bitset* bitset)
@@ -389,6 +435,22 @@ static int get_most_common_label(int num_labels, int* labels, Bitset* bitset)
     return most_common;
 }
 
+static float get_labels_average(int num_labels, float* labels, Bitset* bitset)
+{
+    int i, cnt;
+    float avg;
+
+    avg = cnt = 0;
+    for (i = 0; i < num_labels; i++) {
+        if (!bitset_isset(bitset, i))
+            continue;
+        avg = (avg * cnt + labels[i]) / (cnt+1);
+        cnt++;
+    }
+
+    return avg;
+}
+
 static void* decision_tree_train_helper(void* void_params)
 {
     DTTrainParams*      params              = void_params;
@@ -419,6 +481,8 @@ static void* decision_tree_train_helper(void* void_params)
     float gini_left, gini_right;
     float error, best_error;
     float error_left, error_right;
+    float rmse, best_rmse;
+    float rmse_left, rmse_right;
     float entropy_parent, entropy_children;
     float entropy_left, entropy_right;
     float best_base;
@@ -445,7 +509,10 @@ static void* decision_tree_train_helper(void* void_params)
     node->label = -1;
 
     if (depth >= config->max_depth || all_labels_equal(num_labels, labels, bitset)) {
-        node->label = get_most_common_label(num_labels, labels, bitset);
+        if (config->type == DT_CLASSIFIER)
+            node->label = get_most_common_label(num_labels, labels, bitset);
+        else
+            node->avg = get_labels_average(num_labels, (float*)labels, bitset);
         return node;
     }
 
@@ -457,6 +524,8 @@ static void* decision_tree_train_helper(void* void_params)
     best_information_gain = -1e9;
     best_gini = 1e9;
     best_error = 1e9;
+    best_rmse = 1e9;
+
     best_attr_idx = -1;
     best_base = -1;
     best_discrete = -1;
@@ -474,46 +543,63 @@ static void* decision_tree_train_helper(void* void_params)
             split(new_params);
             n_left = bitset_numset(bitset_left);
             n_right = bitset_numset(bitset_right);
-            if (config->condition == DT_SPLIT_ENTROPY) {
-                entropy_parent = calculate_entropy(num_labels, labels, bitset);
-                entropy_left = calculate_entropy(num_labels, labels, bitset_left);
-                entropy_right = calculate_entropy(num_labels, labels, bitset_right);
-                entropy_children = (
-                        ((float)n_left  / n_parent) * entropy_left
-                    +   ((float)n_right / n_parent) * entropy_right
-                );
-                information_gain = entropy_parent - entropy_children;
-                if (information_gain > best_information_gain) {
-                    best_information_gain = information_gain;
-                    best_attr_idx = new_params->attr_idx;
-                    best_base = new_params->base;
-                    best_discrete = new_params->discrete;
+            if (config->type == DT_CLASSIFIER) {
+                if (config->condition == DT_SPLIT_ENTROPY) {
+                    entropy_parent = calculate_entropy(num_labels, labels, bitset);
+                    entropy_left = calculate_entropy(num_labels, labels, bitset_left);
+                    entropy_right = calculate_entropy(num_labels, labels, bitset_right);
+                    entropy_children = (
+                            ((float)n_left  / n_parent) * entropy_left
+                        +   ((float)n_right / n_parent) * entropy_right
+                    );
+                    information_gain = entropy_parent - entropy_children;
+                    if (information_gain > best_information_gain) {
+                        best_information_gain = information_gain;
+                        best_attr_idx = new_params->attr_idx;
+                        best_base = new_params->base;
+                        best_discrete = new_params->discrete;
+                    }
+                } else if (config->condition == DT_SPLIT_GINI) {
+                    gini_left = calculate_gini(num_labels, labels, bitset_left);
+                    gini_right = calculate_gini(num_labels, labels, bitset_right);
+                    gini = (
+                            ((float)n_left  / n_parent) * gini_left
+                        +   ((float)n_right / n_parent) * gini_right
+                    );
+                    if (gini < best_gini) {
+                        best_gini = gini;
+                        best_attr_idx = new_params->attr_idx;
+                        best_base = new_params->base;
+                        best_discrete = new_params->discrete;
+                    }
+                } else if (config->condition == DT_SPLIT_ERROR) {
+                    error_left = calculate_error(num_labels, labels, bitset_left);
+                    error_right = calculate_error(num_labels, labels, bitset_right);
+                    error = (
+                            ((float)n_left  / n_parent) * error_left
+                        +   ((float)n_right / n_parent) * error_right
+                    );
+                    if (error < best_error) {
+                        best_error = error;
+                        best_attr_idx = new_params->attr_idx;
+                        best_base = new_params->base;
+                        best_discrete = new_params->discrete;
+                    }
                 }
-            } else if (config->condition == DT_SPLIT_GINI) {
-                gini_left = calculate_gini(num_labels, labels, bitset_left);
-                gini_right = calculate_gini(num_labels, labels, bitset_right);
-                gini = (
-                        ((float)n_left  / n_parent) * gini_left
-                    +   ((float)n_right / n_parent) * gini_right
-                );
-                if (gini < best_gini) {
-                    best_gini = gini;
-                    best_attr_idx = new_params->attr_idx;
-                    best_base = new_params->base;
-                    best_discrete = new_params->discrete;
-                }
-            } else if (config->condition == DT_SPLIT_ERROR) {
-                error_left = calculate_error(num_labels, labels, bitset_left);
-                error_right = calculate_error(num_labels, labels, bitset_right);
-                error = (
-                        ((float)n_left  / n_parent) * error_left
-                    +   ((float)n_right / n_parent) * error_right
-                );
-                if (error < best_error) {
-                    best_error = error;
-                    best_attr_idx = new_params->attr_idx;
-                    best_base = new_params->base;
-                    best_discrete = new_params->discrete;
+            } else if (config->type == DT_REGRESSOR) {
+                if (config->condition == DT_SPLIT_RMSE) {
+                    rmse_left = calculate_rmse(num_labels, (float*)labels, bitset_left);
+                    rmse_right = calculate_rmse(num_labels, (float*)labels, bitset_right);
+                    rmse = (
+                            ((float)n_left  / n_parent) * rmse_left
+                        +   ((float)n_right / n_parent) * rmse_right
+                    );
+                    if (rmse < best_rmse) {
+                        best_rmse = rmse;
+                        best_attr_idx = new_params->attr_idx;
+                        best_base = new_params->base;
+                        best_discrete = new_params->discrete;
+                    }
                 }
             }
         }
@@ -593,13 +679,22 @@ static int validate_config(DTTrainConfig* config)
         return 0;
     }
 
-    int condition_valid = (
+    int classifier_condition_valid = (
             config->condition == DT_SPLIT_ENTROPY
         ||  config->condition == DT_SPLIT_GINI
         ||  config->condition == DT_SPLIT_ERROR
     );
-    if (!condition_valid) {
-        puts("Config condition must be DT_SPLIT_ENTROPY, DT_SPLIT_GINI, or DT_SPLIT_ERROR");
+    if (config->type == DT_CLASSIFIER && !classifier_condition_valid) {
+        puts("Config condition for classifier must be DT_SPLIT_ENTROPY, DT_SPLIT_GINI, or DT_SPLIT_ERROR");
+        return 0;
+    }
+
+    int regressor_condition_valid = (
+            config->condition == DT_SPLIT_RMSE
+    );
+
+    if (config->type == DT_REGRESSOR && !regressor_condition_valid) {
+        puts("Config condition for regressor must be DT_SPLIT_RMSE");
         return 0;
     }
 
@@ -621,7 +716,7 @@ static int validate_config(DTTrainConfig* config)
     return 1;
 }
 
-void decision_tree_train(DecisionTree* dt, int num_labels, float* attr, int* labels)
+void decision_tree_train(DecisionTree* dt, int num_labels, float* attr, void* labels)
 {
     Bitset* bitset = bitset_create(num_labels);
     bitset_setall(bitset);
@@ -637,7 +732,7 @@ void decision_tree_train(DecisionTree* dt, int num_labels, float* attr, int* lab
     params->num_attr = dt->num_attr;
     params->num_labels = num_labels;;
     params->attr = attr;
-    params->labels = labels;
+    params->labels = (int*)labels;
     params->bitset = bitset;
     params->depth = 0;
     params->thread_mutex = NULL;
@@ -654,40 +749,68 @@ void decision_tree_train(DecisionTree* dt, int num_labels, float* attr, int* lab
 
 void decision_tree_destroy(DecisionTree* dt)
 {
+    if (dt->attr_names != NULL)
+        for (int i = 0; i < dt->num_attr; i++)
+            free(dt->attr_names[i]);
+    free(dt->attr_names);
     dtnode_destroy(dt->root);
     free(dt); 
 }
 
-int decision_tree_predict(DecisionTree* dt, float* attr)
+static void* decision_tree_predict(DecisionTree* dt, float* attr)
 {
-    if (dt->root == NULL)
-        return -1;
-
     int (*cmp)(float, float);
+    int attr_idx;
+    float value;
     DTNode* cur = dt->root;
     const char* eq;
     const char* res;
+    const char* name;
+    char buf[32];
 
     while (!dtnode_isleaf(cur)) {
         cmp = (cur->discrete) ? cmp_discrete : cmp_continuous;
+        attr_idx = cur->attr_idx;
+        value = attr[attr_idx];
 
         if (cur->discrete)
             eq = "==";
         else
             eq = "<=";
 
-        if (cmp(cur->base, attr[cur->attr_idx]))
+        if (cmp(cur->base, value))
             res = "Yes";
         else
             res = "No";
 
-        printf("Is (attr_idx[%d] = %f) %s %f? %s\n", cur->attr_idx, attr[cur->attr_idx], eq, cur->base, res);
+        if (dt->attr_names != NULL && dt->attr_names[attr_idx] != NULL)
+            name = dt->attr_names[attr_idx];
+        else {
+            sprintf(buf, "attribute %d", attr_idx+1);        
+            name = buf;
+        }
 
-        if (cmp(cur->base, attr[cur->attr_idx]))
+        printf("Is %20s = %-6.2f %s %6.2f? %s\n", name, value, eq, cur->base, res);
+
+        if (cmp(cur->base, value))
             cur = cur->right;
         else
             cur = cur->left;
     }
 
-    return cur->label;
+    return &cur->label;
+}
+
+int decision_tree_classifier_predict(DecisionTree* dt, float* attr)
+{
+    if (dt->root == NULL)
+        return 0;
+    return *(int*)decision_tree_predict(dt, attr);
+}
+
+float decision_tree_regressor_predict(DecisionTree* dt, float* attr)
+{
+    if (dt->root == NULL)
+        return 0;
+    return *(float*)decision_tree_predict(dt, attr);
 }

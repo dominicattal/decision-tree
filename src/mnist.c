@@ -72,7 +72,7 @@ void mnist_test()
         set_matrix_row(mat, i, images[i].data);
     }
 
-    DecisionTree* dt = decision_tree_create(IMAGE_LENGTH * IMAGE_LENGTH);
+    DecisionTree* dt = decision_tree_create(IMAGE_LENGTH * IMAGE_LENGTH, NULL);
 
     DTTrainConfig config = (DTTrainConfig) {
         .type = DT_CLASSIFIER,

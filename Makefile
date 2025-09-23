@@ -1,6 +1,6 @@
 NAME = a.exe
 STANDARD = c23
-FLAGS = -pthread -Wall -Wextra -Werror -Wfatal-errors -Wno-unused-function -Ilib 
+FLAGS = -MMD -pthread -Wall -Wextra -Werror -Wfatal-errors -Wno-unused-function -Ilib 
 DB_FLAGS = -g3
 STB_DEFS = -D STB_IMAGE_IMPLEMENTATION -D STB_IMAGE_WRITE_IMPLEMENTATION
 
