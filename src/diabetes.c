@@ -1,4 +1,5 @@
 #include "tests.h"
+#include "models.h"
 #include "models/decisiontree.h"
 #include "matrix.h"
 #include <stdio.h>
@@ -33,7 +34,7 @@ void diabetes_test(void)
     config.max_num_threads = 20;
     config.max_depth = 50;
     config.discrete_threshold = 5;
-    config.condition = DT_SPLIT_GINI;
+    config.condition = DT_SPLIT_ENTROPY;
 
     decision_tree_config(dt, config);
 

@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 typedef struct DTNode DTNode;
 
@@ -150,7 +151,7 @@ not_unique:
     return unique_values;
 }
 
-static int get_num_unique_labels(int num_labels, int* labels, Bitset* bitset)
+static int get_num_unique_labels(int num_labels, int* labels)
 {
     int i, j;
     int label1, label2;
@@ -158,12 +159,8 @@ static int get_num_unique_labels(int num_labels, int* labels, Bitset* bitset)
 
     num_unique_labels = 0;
     for (i = 0; i < num_labels; i++) {
-        if (!bitset_isset(bitset, i))
-            continue;
         label1 = labels[i];
         for (j = 0; j < i; j++) {
-            if (!bitset_isset(bitset, j))
-                continue;
             label2 = labels[j];
             if (label1 == label2)
                 goto not_unqiue;
@@ -175,20 +172,17 @@ not_unqiue:
     return num_unique_labels;
 }
 
-static int* get_unique_labels(int num_unique_labels, int num_labels, int* labels, Bitset* bitset)
+static int* get_unique_labels(int num_unique_labels, int num_labels, int* labels)
 {
     int uniq_idx, i, j, label;
     int* unique_labels = malloc(num_unique_labels * sizeof(int));
 
     uniq_idx = 0;
     for (i = 0; i < num_labels; i++) {
-        if (!bitset_isset(bitset, i))
-            continue;
         label = labels[i];
-        for (j = 0; j < uniq_idx; j++) {
+        for (j = 0; j < uniq_idx; j++)
             if (label == unique_labels[j])
                 goto not_unique;
-        }
         unique_labels[uniq_idx++] = label;
 not_unique:
     }
@@ -218,9 +212,11 @@ static int* get_unique_labels_count(int num_unique_labels, int* unique_labels, i
 typedef struct {
     DTTrainConfig*      config;
     int                 num_labels;
+    int*                labels;
+    int                 num_unique_labels;
+    int*                unique_labels;
     int                 num_attr;
     float*              attr;
-    int*                labels;
     int                 attr_idx;
     int                 discrete;
     float               base;
@@ -272,116 +268,84 @@ static void split(DTTrainParams* params)
     }
 }
 
-static float calculate_entropy(int num_labels, int* labels, Bitset* bitset)
+static float calculate_entropy(float res, float p)
 {
-    float entropy, p;
-    int n, num_unique_labels, uniq_idx;
-    int* unique_labels;
+    return res - p * log2(p);
+}
+
+static float calculate_gini(float res, float p)
+{
+    return res - p * p;
+}
+
+static float calculate_error(float res, float p)
+{
+    return (res > 1 - p) ? res : 1 - p;
+}
+
+static float calculate_split_classifier(DTTrainParams* params, Bitset* bitset)
+{
+    DTTrainConfig*  config              = params->config;
+    int             num_unique_labels   = params->num_unique_labels;
+    int*            unique_labels       = params->unique_labels;
+    int             num_labels          = params->num_labels;
+    int*            labels              = params->labels;
+
+    float res, p;
+    int n, uniq_idx;
     int* unique_labels_count;
+    float (*calculate)(float, float);
 
     n = bitset_numset(bitset);
     if (n == 0)
         return 0;
 
-    num_unique_labels = get_num_unique_labels(num_labels, labels, bitset);
-    unique_labels = get_unique_labels(num_unique_labels, num_labels, labels, bitset);
     unique_labels_count = get_unique_labels_count(num_unique_labels, unique_labels, num_labels, labels, bitset);
 
-    entropy = 0;
+    if (config->condition == DT_SPLIT_ENTROPY)
+        calculate = calculate_entropy;
+    else if (config->condition == DT_SPLIT_GINI)
+        calculate = calculate_gini;
+    else
+        calculate = calculate_error;
+
+    res = 0;
     for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
         if (unique_labels_count[uniq_idx] == 0)
             continue;
         p = (float)unique_labels_count[uniq_idx] / n;
-        entropy -= p * log2(p);
+        res = calculate(res, p);
     }
 
-    free(unique_labels);
     free(unique_labels_count);
 
-    return entropy;
-}
-
-static float calculate_gini(int num_labels, int* labels, Bitset* bitset)
-{
-    float gini, p;
-    int n, num_unique_labels, uniq_idx;
-    int* unique_labels;
-    int* unique_labels_count;
-
-    n = bitset_numset(bitset);
-    if (n == 0)
-        return 0;
-
-    num_unique_labels = get_num_unique_labels(num_labels, labels, bitset);
-    unique_labels = get_unique_labels(num_unique_labels, num_labels, labels, bitset);
-    unique_labels_count = get_unique_labels_count(num_unique_labels, unique_labels, num_labels, labels, bitset);
-
-    gini = 1;
-    for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
-        if (unique_labels_count[uniq_idx] == 0)
-            continue;
-        p = (float)unique_labels_count[uniq_idx] / n;
-        gini -= p * p;
-    }
-
-    free(unique_labels);
-    free(unique_labels_count);
-
-    return gini;
-}
-
-static float calculate_error(int num_labels, int* labels, Bitset* bitset)
-{
-    float test_p, p;
-    int n, num_unique_labels, uniq_idx;
-    int* unique_labels;
-    int* unique_labels_count;
-
-    n = bitset_numset(bitset);
-    if (n == 0)
-        return 0;
-
-    num_unique_labels = get_num_unique_labels(num_labels, labels, bitset);
-    unique_labels = get_unique_labels(num_unique_labels, num_labels, labels, bitset);
-    unique_labels_count = get_unique_labels_count(num_unique_labels, unique_labels, num_labels, labels, bitset);
-
-    p = 0;
-    for (uniq_idx = 0; uniq_idx < num_unique_labels; uniq_idx++) {
-        if (unique_labels_count[uniq_idx] == 0)
-            continue;
-        test_p = (float)unique_labels_count[uniq_idx] / n;
-        p = (test_p > p) ? test_p : p;
-    }
-
-    free(unique_labels);
-    free(unique_labels_count);
-
-    return 1 - p;
+    return res;
 }
 
 static float calculate_rmse(int num_labels, float* labels, Bitset* bitset)
 {
     float avg, sum, val;
-    int n, cnt, label_idx;
+    int n, label_idx;
 
     n = bitset_numset(bitset);
     if (n == 0)
         return 0;
 
-    avg = cnt = 0;
+    sum = 0;
     for (label_idx = 0; label_idx < num_labels; label_idx++) {
         if (!bitset_isset(bitset, label_idx))
             continue;
-        avg = (avg * cnt + labels[label_idx]) / (cnt + 1);
-        cnt++;
+        sum += labels[label_idx];
     }
+    avg = sum / n;
     sum = 0;
     for (label_idx = 0; label_idx < num_labels; label_idx++) {
         if (!bitset_isset(bitset, label_idx))
             continue;
         val = fabsf(labels[label_idx] - avg);
-        sum += (val * val) / n;
+        sum += val * val;
     }
+    sum /= n;
 
     return sqrt(sum);
 }
@@ -403,13 +367,11 @@ static int all_labels_equal(int num_labels, int* labels, Bitset* bitset)
     return 1;
 }
 
-static int get_most_common_label(int num_labels, int* labels, Bitset* bitset)
+static int get_most_common_label(int num_unique_labels, int* unique_labels, int num_labels, int* labels, Bitset* bitset)
 {
     int i, j, most_common_idx, most_common;
-    int num_unique_labels = get_num_unique_labels(num_labels, labels, bitset);
     if (num_unique_labels == 0)
         return -1;
-    int* unique_labels = get_unique_labels(num_unique_labels, num_labels, labels, bitset);
     int* unique_labels_count = calloc(num_unique_labels, sizeof(int));
 
     for (i = 0; i < num_labels; i++) {
@@ -429,7 +391,6 @@ static int get_most_common_label(int num_labels, int* labels, Bitset* bitset)
             most_common_idx = i;
     most_common = unique_labels[most_common_idx];
 
-    free(unique_labels);
     free(unique_labels_count);
 
     return most_common;
@@ -457,9 +418,11 @@ static void* decision_tree_train_helper(void* void_params)
     Bitset*             bitset              = params->bitset;
     DTTrainConfig*      config              = params->config;
     int                 num_labels          = params->num_labels;
+    int*                labels              = params->labels;
+    int                 num_unique_labels   = params->num_unique_labels;
+    int*                unique_labels       = params->unique_labels;
     int                 num_attr            = params->num_attr;
     float*              attr                = params->attr;
-    int*                labels              = params->labels;
     int                 depth               = params->depth;
     int*                num_threads_ptr     = params->num_threads_ptr;
     pthread_mutex_t*    num_threads_mutex   = params->num_threads_mutex;
@@ -476,15 +439,10 @@ static void* decision_tree_train_helper(void* void_params)
     int best_discrete;
     int uniq_idx, num_unique_values;
     int n_parent, n_left, n_right;
-    float information_gain, best_information_gain;
-    float gini, best_gini;
-    float gini_left, gini_right;
-    float error, best_error;
-    float error_left, error_right;
+    float score, best_score;
+    float score_left, score_right;
     float rmse, best_rmse;
     float rmse_left, rmse_right;
-    float entropy_parent, entropy_children;
-    float entropy_left, entropy_right;
     float best_base;
     pthread_t thid;
     void* async_left;
@@ -492,9 +450,11 @@ static void* decision_tree_train_helper(void* void_params)
     new_params = malloc(sizeof(DTTrainParams));
     new_params->config = config;
     new_params->num_labels = num_labels;
+    new_params->labels = labels;
+    new_params->num_unique_labels = num_unique_labels;
+    new_params->unique_labels = unique_labels;
     new_params->num_attr = num_attr;
     new_params->attr = attr;
-    new_params->labels = labels;
     new_params->depth = depth + 1;
     new_params->bitset = bitset;
     new_params->num_threads_ptr = num_threads_ptr;
@@ -510,7 +470,7 @@ static void* decision_tree_train_helper(void* void_params)
 
     if (depth >= config->max_depth || all_labels_equal(num_labels, labels, bitset)) {
         if (config->type == DT_CLASSIFIER)
-            node->label = get_most_common_label(num_labels, labels, bitset);
+            node->label = get_most_common_label(num_unique_labels, unique_labels, num_labels, labels, bitset);
         else
             node->avg = get_labels_average(num_labels, (float*)labels, bitset);
         return node;
@@ -521,9 +481,7 @@ static void* decision_tree_train_helper(void* void_params)
     new_params->bitset_left = &bitset_left;
     new_params->bitset_right = &bitset_right;
 
-    best_information_gain = -1e9;
-    best_gini = 1e9;
-    best_error = 1e9;
+    best_score = 1e9;
     best_rmse = 1e9;
 
     best_attr_idx = -1;
@@ -543,48 +501,20 @@ static void* decision_tree_train_helper(void* void_params)
             split(new_params);
             n_left = bitset_numset(bitset_left);
             n_right = bitset_numset(bitset_right);
+            if (n_left == 0 || n_right == 0)
+                continue;
             if (config->type == DT_CLASSIFIER) {
-                if (config->condition == DT_SPLIT_ENTROPY) {
-                    entropy_parent = calculate_entropy(num_labels, labels, bitset);
-                    entropy_left = calculate_entropy(num_labels, labels, bitset_left);
-                    entropy_right = calculate_entropy(num_labels, labels, bitset_right);
-                    entropy_children = (
-                            ((float)n_left  / n_parent) * entropy_left
-                        +   ((float)n_right / n_parent) * entropy_right
-                    );
-                    information_gain = entropy_parent - entropy_children;
-                    if (information_gain > best_information_gain) {
-                        best_information_gain = information_gain;
-                        best_attr_idx = new_params->attr_idx;
-                        best_base = new_params->base;
-                        best_discrete = new_params->discrete;
-                    }
-                } else if (config->condition == DT_SPLIT_GINI) {
-                    gini_left = calculate_gini(num_labels, labels, bitset_left);
-                    gini_right = calculate_gini(num_labels, labels, bitset_right);
-                    gini = (
-                            ((float)n_left  / n_parent) * gini_left
-                        +   ((float)n_right / n_parent) * gini_right
-                    );
-                    if (gini < best_gini) {
-                        best_gini = gini;
-                        best_attr_idx = new_params->attr_idx;
-                        best_base = new_params->base;
-                        best_discrete = new_params->discrete;
-                    }
-                } else if (config->condition == DT_SPLIT_ERROR) {
-                    error_left = calculate_error(num_labels, labels, bitset_left);
-                    error_right = calculate_error(num_labels, labels, bitset_right);
-                    error = (
-                            ((float)n_left  / n_parent) * error_left
-                        +   ((float)n_right / n_parent) * error_right
-                    );
-                    if (error < best_error) {
-                        best_error = error;
-                        best_attr_idx = new_params->attr_idx;
-                        best_base = new_params->base;
-                        best_discrete = new_params->discrete;
-                    }
+                score_left = calculate_split_classifier(new_params, bitset_left);
+                score_right = calculate_split_classifier(new_params, bitset_right);
+                score = (
+                            ((float)n_left  / n_parent) * score_left
+                        +   ((float)n_right / n_parent) * score_right
+                );
+                if (score < best_score) {
+                    best_score = score;
+                    best_attr_idx = new_params->attr_idx;
+                    best_base = new_params->base;
+                    best_discrete = new_params->discrete;
                 }
             } else if (config->type == DT_REGRESSOR) {
                 if (config->condition == DT_SPLIT_RMSE) {
@@ -620,12 +550,6 @@ static void* decision_tree_train_helper(void* void_params)
 
     n_left = bitset_numset(bitset_left);
     n_right = bitset_numset(bitset_right);
-    if (depth == 2 && node->base == 6) {
-        for (int i = 0; i < num_labels; i++) {
-            if (!bitset_isset(bitset_right, i))
-                continue;
-        }
-    }
 
     new_params->bitset_left = NULL;
     new_params->bitset_right = NULL;
@@ -731,17 +655,25 @@ void decision_tree_train(DecisionTree* dt, int num_labels, float* attr, void* la
     }
     params->num_attr = dt->num_attr;
     params->num_labels = num_labels;;
-    params->attr = attr;
     params->labels = (int*)labels;
+    params->num_unique_labels = get_num_unique_labels(num_labels, labels);
+    params->unique_labels = get_unique_labels(params->num_unique_labels, num_labels, labels);
+    params->attr = attr;
     params->bitset = bitset;
     params->depth = 0;
     params->thread_mutex = NULL;
     params->num_threads_ptr = &num_threads;
     params->num_threads_mutex = malloc(sizeof(pthread_mutex_t));
     pthread_mutex_init(params->num_threads_mutex, NULL);
+
+    puts("Training decision tree");
+    clock_t t = clock();
     dt->root = decision_tree_train_helper(params);
+    t = clock() - t;
+    printf("Trained in %f s\n", ((double)t)/CLOCKS_PER_SEC);
 
     pthread_mutex_destroy(params->num_threads_mutex);
+    free(params->unique_labels);
     free(params->num_threads_mutex);
     free(params);
     bitset_destroy(bitset);
@@ -790,7 +722,7 @@ static void* decision_tree_predict(DecisionTree* dt, float* attr)
             name = buf;
         }
 
-        printf("Is %20s = %-6.2f %s %6.2f? %s\n", name, value, eq, cur->base, res);
+        printf("Is %20s = %8.4f %s %8.4f? %s\n", name, value, eq, cur->base, res);
 
         if (cmp(cur->base, value))
             cur = cur->right;
@@ -813,4 +745,33 @@ float decision_tree_regressor_predict(DecisionTree* dt, float* attr)
     if (dt->root == NULL)
         return 0;
     return *(float*)decision_tree_predict(dt, attr);
+}
+
+DecisionTree* decision_tree_read(const char* path)
+{
+    return NULL;
+}
+
+void deicison_tree_write(DecisionTree* dt, const char* path)
+{
+    int i, j, n, m;
+    FILE* fptr = fopen(path, "wb");
+    if (fptr == NULL) {
+        printf("Failed to open path: %s\n", path);
+        return;
+    }
+
+    fwrite(&dt->config, sizeof(DTTrainConfig), 1, fptr);
+    fwrite(&dt->num_attr, sizeof(int), 1, fptr);
+    for (i = 0; i < dt->num_attr; i++) {
+        m = (dt->attr_names[i]) ? strlen(dt->attr_names[i]) : 0;
+        fwrite(&m, sizeof(int), 1, fptr);
+        for (j = 0; j < dt->num_attr; j++)
+            fwrite(dt->attr_names[i], sizeof(char), m, fptr);
+    }
+
+    n = 1;
+    fwrite(&n, sizeof(int), 1, fptr);
+
+    fclose(fptr);
 }

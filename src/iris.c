@@ -37,7 +37,7 @@ void iris_test(void)
     DTTrainConfig config = decision_tree_default_config();
     config.max_num_threads = 20;
     config.discrete_threshold = 2;
-    config.condition = DT_SPLIT_GINI;
+    config.condition = DT_SPLIT_ERROR;
 
     decision_tree_config(dt, config);
     decision_tree_train(dt, csv->num_rows-1, matrix->buffer, labels);
@@ -45,11 +45,13 @@ void iris_test(void)
     float test[4] = {7.9, 3.1, 2.0, 0.1};
     int label = decision_tree_classifier_predict(dt, test);
     printf("Prediction: %s\n", csv_decode(csv, label));
+    puts("");
 
     puts("==== Regressor ====");
 
     config.type = DT_REGRESSOR;
     config.condition = DT_SPLIT_RMSE;
+    config.max_depth = 8;
 
     decision_tree_config(dt, config);
 

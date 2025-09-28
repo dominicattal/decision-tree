@@ -2,6 +2,7 @@
 
 int main()
 {
-    iris_test();
+    //iris_test();
     diabetes_test();
+    //bikes_test();
 }

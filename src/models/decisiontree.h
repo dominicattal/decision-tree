@@ -35,6 +35,10 @@ DecisionTree*   decision_tree_create(int num_attr, const char** attr_names);
 // Destroy a decision tree
 void            decision_tree_destroy(DecisionTree* dt); 
 
+// Read and write a decision tree to avoid retraining
+DecisionTree*   decision_tree_read(const char* path);
+void            deicison_tree_write(DecisionTree* dt, const char* path);
+
 // Refit the decision tree to new attributes. Forgets old tree.
 void            decision_tree_set_attr(DecisionTree* dt, int num_attr, const char** attr_names);
 
