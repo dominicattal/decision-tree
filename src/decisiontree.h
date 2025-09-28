@@ -15,14 +15,15 @@ typedef enum {
     DT_SPLIT_ERROR,
 
     // DT_REGRESSOR split conditions
-    DT_SPLIT_RMSE,
+    DT_SPLIT_MSE,
+    DT_SPLIT_ABS_ERROR,
 
 } DTEnum;
 
 typedef struct {
     DTEnum  type;
-    DTEnum  condition;
-    int     discrete_threshold;
+    DTEnum  splitter;
+    int     min_samples_split;
     int     max_depth;
     int     max_num_threads;
 } DTTrainConfig;
@@ -45,7 +46,7 @@ void            decision_tree_set_attr(DecisionTree* dt, int num_attr, const cha
 // Returns the default config:
 //      type = DT_CLASSIFIER
 //      condition = DT_SPLIT_ENTROPY
-//      discrete_threshold = 5
+//      min_samples_split = 2
 //      max_depth = 8
 //      max_num_threads = 1
 DTTrainConfig   decision_tree_default_config(void);
@@ -61,11 +62,17 @@ void            decision_tree_config(DecisionTree* dt, DTTrainConfig config);
 // labels can be either an integer array or a float array for classifiers or regressors respectively
 void            decision_tree_train(DecisionTree* dt, int num_labels, float* attr, void* labels);
 
+// Test a decision tree. Returns the predictions in an array of size num_labels
+int*            decision_tree_classifier_test(DecisionTree* dt, int num_labels, float* attr);
+float*          decision_tree_regressor_test(DecisionTree* dt, int num_labels, float* attr);
+
 // Returns the predicted label for a decision tree classifier
 int             decision_tree_classifier_predict(DecisionTree* dt, float* attr);
+int             decision_tree_classifier_predict_verbose(DecisionTree* dt, float* attr);
 
 // Returns the predicted value for a decision tree regressor
 float           decision_tree_regressor_predict(DecisionTree* dt, float* attr);
+float           decision_tree_regressor_predict_verbose(DecisionTree* dt, float* attr);
 
 #endif
 

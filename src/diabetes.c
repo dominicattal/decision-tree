@@ -1,6 +1,5 @@
 #include "tests.h"
-#include "models.h"
-#include "models/decisiontree.h"
+#include "decisiontree.h"
 #include "matrix.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,8 +32,8 @@ void diabetes_test_write(void)
     DTTrainConfig config = decision_tree_default_config();
     config.max_num_threads = 20;
     config.max_depth = 50;
-    config.discrete_threshold = 5;
-    config.condition = DT_SPLIT_ENTROPY;
+    config.min_samples_split = 5;
+    config.splitter = DT_SPLIT_ENTROPY;
 
     decision_tree_config(dt, config);
 

@@ -1,5 +1,5 @@
 #include "tests.h"
-#include "models/decisiontree.h"
+#include "decisiontree.h"
 #include "matrix.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,8 +36,8 @@ void iris_test(void)
 
     DTTrainConfig config = decision_tree_default_config();
     config.max_num_threads = 20;
-    config.discrete_threshold = 2;
-    config.condition = DT_SPLIT_ERROR;
+    config.min_samples_split = 2;
+    config.splitter = DT_SPLIT_ERROR;
 
     decision_tree_config(dt, config);
     decision_tree_train(dt, csv->num_rows-1, matrix->buffer, labels);
@@ -50,7 +50,7 @@ void iris_test(void)
     puts("==== Regressor ====");
 
     config.type = DT_REGRESSOR;
-    config.condition = DT_SPLIT_RMSE;
+    config.splitter = DT_SPLIT_MSE;
     config.max_depth = 8;
 
     decision_tree_config(dt, config);

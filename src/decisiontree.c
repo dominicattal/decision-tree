@@ -87,8 +87,8 @@ DTTrainConfig decision_tree_default_config(void)
 {
     return (DTTrainConfig) {
         .type = DT_CLASSIFIER,
-        .condition = DT_SPLIT_ENTROPY,
-        .discrete_threshold = 5,
+        .splitter = DT_SPLIT_ENTROPY,
+        .min_samples_split = 5,
         .max_depth = 8,
         .max_num_threads = 1
     };
@@ -302,9 +302,9 @@ static float calculate_split_classifier(DTTrainParams* params, Bitset* bitset)
 
     unique_labels_count = get_unique_labels_count(num_unique_labels, unique_labels, num_labels, labels, bitset);
 
-    if (config->condition == DT_SPLIT_ENTROPY)
+    if (config->splitter == DT_SPLIT_ENTROPY)
         calculate = calculate_entropy;
-    else if (config->condition == DT_SPLIT_GINI)
+    else if (config->splitter == DT_SPLIT_GINI)
         calculate = calculate_gini;
     else
         calculate = calculate_error;
@@ -322,32 +322,52 @@ static float calculate_split_classifier(DTTrainParams* params, Bitset* bitset)
     return res;
 }
 
-static float calculate_rmse(int num_labels, float* labels, Bitset* bitset)
+static float calculate_mse(float res, float val)
 {
-    float avg, sum, val;
+    return res + val * val;
+}
+
+static float calculate_abs_error(float res, float val)
+{
+    return res + val;
+}
+
+static float calculate_split_regressor(DTTrainParams* params, Bitset* bitset)
+{
+    DTTrainConfig*  config  = params->config;
+    int     num_labels      = params->num_labels;
+    float*  labels          = (float*)params->labels;
+
+    float avg, res, val;
     int n, label_idx;
+    float (*calculate)(float, float);
 
     n = bitset_numset(bitset);
     if (n == 0)
         return 0;
 
-    sum = 0;
+    if (config->splitter == DT_SPLIT_MSE)
+        calculate = calculate_mse;
+    else
+        calculate = calculate_abs_error;
+
+    res = 0;
     for (label_idx = 0; label_idx < num_labels; label_idx++) {
         if (!bitset_isset(bitset, label_idx))
             continue;
-        sum += labels[label_idx];
+        res += labels[label_idx];
     }
-    avg = sum / n;
-    sum = 0;
+    avg = res / n;
+    res = 0;
     for (label_idx = 0; label_idx < num_labels; label_idx++) {
         if (!bitset_isset(bitset, label_idx))
             continue;
         val = fabsf(labels[label_idx] - avg);
-        sum += val * val;
+        res = calculate(res, val);
     }
-    sum /= n;
+    res /= n;
 
-    return sqrt(sum);
+    return res;
 }
 
 static int all_labels_equal(int num_labels, int* labels, Bitset* bitset)
@@ -441,9 +461,8 @@ static void* decision_tree_train_helper(void* void_params)
     int n_parent, n_left, n_right;
     float score, best_score;
     float score_left, score_right;
-    float rmse, best_rmse;
-    float rmse_left, rmse_right;
     float best_base;
+    bool classifier_condition;
     pthread_t thid;
     void* async_left;
 
@@ -468,7 +487,8 @@ static void* decision_tree_train_helper(void* void_params)
     node->discrete = -1;
     node->label = -1;
 
-    if (depth >= config->max_depth || all_labels_equal(num_labels, labels, bitset)) {
+    classifier_condition = config->type == DT_CLASSIFIER && all_labels_equal(num_labels, labels, bitset);
+    if (depth >= config->max_depth || classifier_condition) {
         if (config->type == DT_CLASSIFIER)
             node->label = get_most_common_label(num_unique_labels, unique_labels, num_labels, labels, bitset);
         else
@@ -482,8 +502,6 @@ static void* decision_tree_train_helper(void* void_params)
     new_params->bitset_right = &bitset_right;
 
     best_score = 1e9;
-    best_rmse = 1e9;
-
     best_attr_idx = -1;
     best_base = -1;
     best_discrete = -1;
@@ -492,7 +510,7 @@ static void* decision_tree_train_helper(void* void_params)
         num_unique_values = get_num_unique_values(num_attr, num_labels, attr, attr_idx, bitset);
         unique_values = get_unique_values(num_unique_values, num_attr, num_labels, attr, attr_idx, bitset);
         n_parent = bitset_numset(bitset);
-        new_params->discrete = num_unique_values <= config->discrete_threshold;
+        new_params->discrete = num_unique_values <= config->min_samples_split;
         new_params->attr_idx = attr_idx;
         for (uniq_idx = 0; uniq_idx < num_unique_values; uniq_idx++) {
             new_params->base = unique_values[uniq_idx];
@@ -517,19 +535,17 @@ static void* decision_tree_train_helper(void* void_params)
                     best_discrete = new_params->discrete;
                 }
             } else if (config->type == DT_REGRESSOR) {
-                if (config->condition == DT_SPLIT_RMSE) {
-                    rmse_left = calculate_rmse(num_labels, (float*)labels, bitset_left);
-                    rmse_right = calculate_rmse(num_labels, (float*)labels, bitset_right);
-                    rmse = (
-                            ((float)n_left  / n_parent) * rmse_left
-                        +   ((float)n_right / n_parent) * rmse_right
-                    );
-                    if (rmse < best_rmse) {
-                        best_rmse = rmse;
-                        best_attr_idx = new_params->attr_idx;
-                        best_base = new_params->base;
-                        best_discrete = new_params->discrete;
-                    }
+                score_left = calculate_split_regressor(new_params, bitset_left);
+                score_right = calculate_split_regressor(new_params, bitset_right);
+                score = (
+                            ((float)n_left  / n_parent) * score_left
+                        +   ((float)n_right / n_parent) * score_right
+                );
+                if (score < best_score) {
+                    best_score = score;
+                    best_attr_idx = new_params->attr_idx;
+                    best_base = new_params->base;
+                    best_discrete = new_params->discrete;
                 }
             }
         }
@@ -604,9 +620,9 @@ static int validate_config(DTTrainConfig* config)
     }
 
     int classifier_condition_valid = (
-            config->condition == DT_SPLIT_ENTROPY
-        ||  config->condition == DT_SPLIT_GINI
-        ||  config->condition == DT_SPLIT_ERROR
+            config->splitter == DT_SPLIT_ENTROPY
+        ||  config->splitter == DT_SPLIT_GINI
+        ||  config->splitter == DT_SPLIT_ERROR
     );
     if (config->type == DT_CLASSIFIER && !classifier_condition_valid) {
         puts("Config condition for classifier must be DT_SPLIT_ENTROPY, DT_SPLIT_GINI, or DT_SPLIT_ERROR");
@@ -614,16 +630,17 @@ static int validate_config(DTTrainConfig* config)
     }
 
     int regressor_condition_valid = (
-            config->condition == DT_SPLIT_RMSE
+            config->splitter == DT_SPLIT_MSE
+        ||  config->splitter == DT_SPLIT_ABS_ERROR
     );
 
     if (config->type == DT_REGRESSOR && !regressor_condition_valid) {
-        puts("Config condition for regressor must be DT_SPLIT_RMSE");
+        puts("Config condition for regressor must be DT_SPLIT_RMSE or DT_SPLIT_ABS_ERROR");
         return 0;
     }
 
-    if (config->discrete_threshold < 2) {
-        puts("Config discrete threshold must be at least 2");
+    if (config->min_samples_split < 2) {
+        puts("Config minimum samples split must be at least 2");
         return 0;
     }
 
@@ -695,6 +712,26 @@ static void* decision_tree_predict(DecisionTree* dt, float* attr)
     int attr_idx;
     float value;
     DTNode* cur = dt->root;
+
+    while (!dtnode_isleaf(cur)) {
+        cmp = (cur->discrete) ? cmp_discrete : cmp_continuous;
+        attr_idx = cur->attr_idx;
+        value = attr[attr_idx];
+        if (cmp(cur->base, value))
+            cur = cur->right;
+        else
+            cur = cur->left;
+    }
+
+    return &cur->label;
+}
+
+static void* decision_tree_predict_verbose(DecisionTree* dt, float* attr)
+{
+    int (*cmp)(float, float);
+    int attr_idx;
+    float value;
+    DTNode* cur = dt->root;
     const char* eq;
     const char* res;
     const char* name;
@@ -740,11 +777,41 @@ int decision_tree_classifier_predict(DecisionTree* dt, float* attr)
     return *(int*)decision_tree_predict(dt, attr);
 }
 
+int decision_tree_classifier_predict_verbose(DecisionTree* dt, float* attr)
+{
+    if (dt->root == NULL)
+        return 0;
+    return *(int*)decision_tree_predict_verbose(dt, attr);
+}
+
 float decision_tree_regressor_predict(DecisionTree* dt, float* attr)
 {
     if (dt->root == NULL)
         return 0;
     return *(float*)decision_tree_predict(dt, attr);
+}
+
+float decision_tree_regressor_predict_verbose(DecisionTree* dt, float* attr)
+{
+    if (dt->root == NULL)
+        return 0;
+    return *(float*)decision_tree_predict_verbose(dt, attr);
+}
+
+int* decision_tree_classifier_test(DecisionTree* dt, int num_labels, float* attr)
+{
+    int* predictions = malloc(num_labels * sizeof(int));
+    for (int i = 0; i < num_labels; i++)
+        predictions[i] = decision_tree_classifier_predict(dt, attr+(i*dt->num_attr));
+    return predictions;
+}
+
+float* decision_tree_regressor_test(DecisionTree* dt, int num_labels, float* attr)
+{
+    float* predictions = malloc(num_labels * sizeof(float));
+    for (int i = 0; i < num_labels; i++)
+        predictions[i] = decision_tree_regressor_predict(dt, attr+(i*dt->num_attr));
+    return predictions;
 }
 
 static int get_num_nodes(DTNode* node)

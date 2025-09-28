@@ -3,6 +3,6 @@
 int main()
 {
     //iris_test();
-    diabetes_test();
-    //bikes_test();
+    //diabetes_test();
+    bikes_test();
 }

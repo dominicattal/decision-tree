@@ -1,5 +1,5 @@
 #include "tests.h"
-#include "models/decisiontree.h"
+#include "decisiontree.h"
 #include "matrix.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,8 +76,7 @@ void mnist_test()
 
     DTTrainConfig config = (DTTrainConfig) {
         .type = DT_CLASSIFIER,
-        .condition = DT_SPLIT_ENTROPY,
-        .discrete_threshold = 5,
+        .splitter = DT_SPLIT_ENTROPY,
         .max_depth = 2,
         .max_num_threads = 20
     };

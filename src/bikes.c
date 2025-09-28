@@ -1,5 +1,5 @@
 #include "tests.h"
-#include "models/decisiontree.h"
+#include "decisiontree.h"
 #include "matrix.h"
 #include <math.h>
 #include <stdio.h>
@@ -48,17 +48,17 @@ void bikes_test(void)
     DTTrainConfig config = decision_tree_default_config();
     config.type = DT_REGRESSOR;
     config.max_num_threads = 20;
-    config.max_depth = 32;
-    config.discrete_threshold = 2;
-    config.condition = DT_SPLIT_RMSE;
+    config.max_depth = 8;
+    config.min_samples_split = 2;
+    config.splitter = DT_SPLIT_MSE;
 
     // load data
     for (int i = 0; i < num_attr; i++) {
         float* col = csv_column_float(csv, columns[i]);
-        float* col_normalized = normalize_col(num_labels_train, col);
-        matrix_set_col(matrix, i, col_normalized);
+        //float* col_normalized = normalize_col(num_labels_train, col);
+        matrix_set_col(matrix, i, col);
         free(col);
-        free(col_normalized);
+        //free(col_normalized);
     }
     float* counts = csv_column_float(csv, "cnt");
 
@@ -66,9 +66,9 @@ void bikes_test(void)
 
     decision_tree_train(dt, num_labels_train, matrix->buffer, counts);
 
-    float test[4] = {0.99398, -0.3697, 0.2321, 1.6161};
+    float test[4] = {5, 11, 25.00, 83};
     float value = decision_tree_regressor_predict(dt, test);
-    printf("Prediction: %f\n", value);
+    printf("Prediction: %d\n", (int)roundf(value));
     
     free(counts);
     matrix_destroy(matrix);
