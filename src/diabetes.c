@@ -8,7 +8,7 @@
 
 #define DIABETES_CSV_PATH "datasets/diabetes/diabetes.csv"
 
-void diabetes_test(void)
+void diabetes_test_write(void)
 {
     CSV* csv = csv_read(DIABETES_CSV_PATH);
 
@@ -46,12 +46,30 @@ void diabetes_test(void)
 
     decision_tree_train(dt, csv->num_rows-1, matrix->buffer, labels);
 
+    decision_tree_write(dt, "models/diabetes.dt");
+
     float test[8] = {6, 148, 72, 35, 0, 33.6, 0.627, 50};
     int out = decision_tree_classifier_predict(dt, test);
-    printf("Prediction: %s", (out) ? "Yes" : "No");
+    printf("Prediction: %s\n", (out) ? "Yes" : "No");
 
     free(labels);
     matrix_destroy(matrix);
     decision_tree_destroy(dt);
     csv_destroy(csv);
+}
+
+void diabetes_test_read(void)
+{
+    DecisionTree* dt = decision_tree_read("models/diabetes.dt");
+    float test[8] = {6, 148, 72, 35, 0, 33.6, 0.627, 50};
+    int out = decision_tree_classifier_predict(dt, test);
+    printf("Prediction: %s\n", (out) ? "Yes" : "No");
+    decision_tree_destroy(dt);
+}
+
+void diabetes_test(void)
+{
+    diabetes_test_write();
+    puts("");
+    diabetes_test_read();
 }

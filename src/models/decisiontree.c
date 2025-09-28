@@ -747,15 +747,49 @@ float decision_tree_regressor_predict(DecisionTree* dt, float* attr)
     return *(float*)decision_tree_predict(dt, attr);
 }
 
-DecisionTree* decision_tree_read(const char* path)
+static int get_num_nodes(DTNode* node)
 {
-    return NULL;
+    if (node == NULL) return 0;
+    return 1 + get_num_nodes(node->left) + get_num_nodes(node->right);
 }
 
-void deicison_tree_write(DecisionTree* dt, const char* path)
+static void write_preorder(FILE* fptr, DTNode* node, int* idx, DTNode** preorder)
 {
-    int i, j, n, m;
-    FILE* fptr = fopen(path, "wb");
+    if (node == NULL)
+        return;
+    preorder[(*idx)++] = node;
+    fwrite(&node->base, sizeof(int), 1, fptr);
+    fwrite(&node->attr_idx, sizeof(int), 1, fptr);
+    fwrite(&node->discrete, sizeof(int), 1, fptr);
+    fwrite(&node->label, sizeof(int), 1, fptr);
+    write_preorder(fptr, node->left, idx, preorder);
+    write_preorder(fptr, node->right, idx, preorder);
+}
+
+static void write_inorder(FILE* fptr, DTNode* node, DTNode** preorder)
+{
+    if (node == NULL)
+        return;
+    write_inorder(fptr, node->left, preorder);
+    int idx = 0;
+    while (preorder[idx] != node)
+        idx++;
+    fwrite(&idx, sizeof(int), 1, fptr);
+    write_inorder(fptr, node->right, preorder);
+}
+
+void decision_tree_write(DecisionTree* dt, const char* path)
+{
+    int i, n, m, idx;
+    DTNode** preorder;
+    FILE* fptr;
+    
+    if (dt->root == NULL) {
+        puts("Nothing to write for decision tree");
+        return;
+    }
+
+    fptr = fopen(path, "wb");
     if (fptr == NULL) {
         printf("Failed to open path: %s\n", path);
         return;
@@ -763,15 +797,104 @@ void deicison_tree_write(DecisionTree* dt, const char* path)
 
     fwrite(&dt->config, sizeof(DTTrainConfig), 1, fptr);
     fwrite(&dt->num_attr, sizeof(int), 1, fptr);
+    n = (dt->attr_names == NULL) ? 0 : dt->num_attr;
+    fwrite(&n, sizeof(int), 1, fptr);
     for (i = 0; i < dt->num_attr; i++) {
         m = (dt->attr_names[i]) ? strlen(dt->attr_names[i]) : 0;
         fwrite(&m, sizeof(int), 1, fptr);
-        for (j = 0; j < dt->num_attr; j++)
-            fwrite(dt->attr_names[i], sizeof(char), m, fptr);
+        fwrite(dt->attr_names[i], sizeof(char), m, fptr);
     }
 
-    n = 1;
+    idx = 0;
+    n = get_num_nodes(dt->root);
+    preorder = malloc(n * sizeof(DTNode*));
     fwrite(&n, sizeof(int), 1, fptr);
+    write_preorder(fptr, dt->root, &idx, preorder);
+    write_inorder(fptr, dt->root, preorder);
 
+    free(preorder);
     fclose(fptr);
+
+    printf("Successfully wrote decision tree to %s\n", path);
+}
+
+static void read_attr_names(FILE* fptr, DecisionTree* dt)
+{
+    int i, n, m;
+    fread(&dt->num_attr, sizeof(int), 1, fptr);
+    fread(&n, sizeof(int), 1, fptr);
+    if (n == 0) {
+        dt->attr_names = NULL;
+        return;
+    }
+    dt->attr_names = malloc(dt->num_attr * sizeof(char*));
+    for (i = 0; i < dt->num_attr; i++) {
+        fread(&m, sizeof(int), 1, fptr);
+        if (m == 0) {
+            dt->attr_names[i] = NULL;
+            continue;
+        }
+        dt->attr_names[i] = malloc((m+1) * sizeof(char));
+        fread(dt->attr_names[i], sizeof(char), m, fptr);
+        dt->attr_names[i][m] = '\0';
+    }
+}
+
+static DTNode* construct_tree(DTNode** preorder, int* inorder, int pl, int pr, int il, int ir)
+{
+    int i, n_left;
+    DTNode* root = preorder[pl];
+
+    if (pl == pr) {
+        root->left = NULL;
+        root->right = NULL;
+        return root;
+    }
+
+    for (i = il; i <= ir; i++)
+        if (inorder[i] == pl)
+            break;
+
+    n_left = i - il;
+    root->left = construct_tree(preorder, inorder, pl+1, pl+n_left, il, i-1);
+    root->right = construct_tree(preorder, inorder, pl+n_left+1, pr, i+1, ir);
+
+    return root;
+}
+
+DecisionTree* decision_tree_read(const char* path)
+{
+    int i, n;
+    DTNode* node;
+    DTNode** preorder;
+    int* inorder;
+    DecisionTree* dt;
+
+    FILE* fptr = fopen(path, "rb");
+    if (fptr == NULL) {
+        printf("Could not open %s\n", path);
+        return NULL;
+    }
+
+    dt = malloc(sizeof(DecisionTree));
+    fread(&dt->config, sizeof(DTTrainConfig), 1, fptr);
+    read_attr_names(fptr, dt);
+    fread(&n, sizeof(int), 1, fptr);
+    preorder = malloc(n * sizeof(DTNode*));
+    for (i = 0; i < n; i++) {
+        node = malloc(sizeof(DTNode));
+        fread(&node->base, sizeof(int), 1, fptr);
+        fread(&node->attr_idx, sizeof(int), 1, fptr);
+        fread(&node->discrete, sizeof(int), 1, fptr);
+        fread(&node->label, sizeof(int), 1, fptr);
+        preorder[i] = node;
+    }
+    inorder = malloc(n * sizeof(int));
+    fread(inorder, sizeof(int), n, fptr);
+
+    dt->root = construct_tree(preorder, inorder, 0, n-1, 0, n-1);
+
+    free(preorder);
+    free(inorder);
+    return dt;
 }
